@@ -127,6 +127,14 @@ export interface ResourceManagerInput {
     required?: boolean;
   }>;
   chain_steps?: Array<Record<string, unknown>>;
+  /** [Prompt] Step-level operation for chain updates (default: replace entire array) */
+  chain_step_operation?: 'add' | 'remove' | 'reorder' | 'replace';
+  /** [Prompt] Target index for add (insertion point) or remove (step to delete) */
+  chain_step_index?: number;
+  /** [Prompt] Step definition for add operation */
+  chain_step_data?: Record<string, unknown>;
+  /** [Prompt] New index order for reorder operation */
+  chain_step_order?: number[];
   /** [Prompt] Script tools to create with the prompt */
   tools?: ToolDefinitionInput[];
   gate_configuration?: {

@@ -10,7 +10,9 @@ import { PromptResourceContext } from '../core/context.js';
 import { FileOperations } from '../operations/file-operations.js';
 import {
   UPDATE_FIELDS,
+  applyChainStepOperation,
   normalizePromptId,
+  validateChainStepReferences,
   validatePromptId,
   validateRequiredFields,
   validateToolDefinitions,
@@ -118,6 +120,16 @@ export class PromptLifecycleProcessor {
       gateConfiguration: args['gate_configuration'] || args.gates,
     };
 
+    // Chain step reference validation (non-blocking warnings)
+    let chainIntegrityWarnings: string[] = [];
+    if (promptData.chainSteps.length > 0) {
+      const allPromptIds = this.getConvertedPrompts().map((p) => p.id);
+      chainIntegrityWarnings = validateChainStepReferences(
+        promptData.chainSteps,
+        allPromptIds
+      ).warnings;
+    }
+
     const result = await this.fileOperations.updatePromptImplementation(promptData);
     const analysis = await this.promptAnalyzer.analyzePromptIntelligence(promptData);
 
@@ -169,6 +181,13 @@ export class PromptLifecycleProcessor {
           response += ` (trigger: ${tool.trigger})`;
         }
         response += '\n';
+      }
+    }
+
+    if (chainIntegrityWarnings.length > 0) {
+      response += `\n⚠️ **Chain Integrity Warnings**:\n`;
+      for (const warning of chainIntegrityWarnings) {
+        response += `- ${warning}\n`;
       }
     }
 
@@ -229,6 +248,27 @@ export class PromptLifecycleProcessor {
     // gate_configuration has alias handling (special case)
     if (args.gate_configuration !== undefined || args.gates !== undefined) {
       promptData.gateConfiguration = args.gate_configuration ?? args.gates;
+    }
+
+    // Chain step-level operations (add/remove/reorder)
+    if (args.chain_step_operation && args.chain_step_operation !== 'replace') {
+      const existingSteps = (currentPrompt?.chainSteps ?? []) as unknown[];
+      promptData.chainSteps = applyChainStepOperation(existingSteps, {
+        operation: args.chain_step_operation,
+        index: args.chain_step_index,
+        stepData: args.chain_step_data,
+        order: args.chain_step_order,
+      });
+    }
+
+    // Chain step reference validation (non-blocking warnings)
+    let chainIntegrityWarnings: string[] = [];
+    if (promptData.chainSteps && promptData.chainSteps.length > 0) {
+      const allPromptIds = this.getConvertedPrompts().map((p) => p.id);
+      chainIntegrityWarnings = validateChainStepReferences(
+        promptData.chainSteps,
+        allPromptIds
+      ).warnings;
     }
 
     // Reference validation for template changes
@@ -324,6 +364,13 @@ export class PromptLifecycleProcessor {
       afterAnalysis.suggestions.forEach((suggestion, i) => {
         response += `${i + 1}. ${suggestion}\n`;
       });
+    }
+
+    if (chainIntegrityWarnings.length > 0) {
+      response += `\n⚠️ **Chain Integrity Warnings**:\n`;
+      for (const warning of chainIntegrityWarnings) {
+        response += `- ${warning}\n`;
+      }
     }
 
     await this.handleSystemRefresh(args.full_restart, `Prompt updated: ${args.id}`);

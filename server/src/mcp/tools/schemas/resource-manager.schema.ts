@@ -8,6 +8,8 @@
 
 import { z } from 'zod';
 
+import { ChainStepSchema } from '../../../modules/prompts/prompt-schema.js';
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
@@ -72,7 +74,15 @@ export const resourceManagerInputSchema = z
       )
       .optional(),
     /** [Prompt] Chain steps definition for multi-step prompts. */
-    chain_steps: z.array(z.unknown()).optional(),
+    chain_steps: z.array(ChainStepSchema.passthrough()).optional(),
+    /** [Prompt] Step-level operation for chain updates (default: replace entire array). */
+    chain_step_operation: z.enum(['add', 'remove', 'reorder', 'replace']).optional(),
+    /** [Prompt] Target index for add (insertion point) or remove (step to delete). */
+    chain_step_index: z.number().int().nonnegative().optional(),
+    /** [Prompt] Step definition for add operation. */
+    chain_step_data: ChainStepSchema.passthrough().optional(),
+    /** [Prompt] New index order for reorder operation (permutation of [0..n-1]). */
+    chain_step_order: z.array(z.number().int().nonnegative()).optional(),
     /** [Prompt] Script tools to create with the prompt. */
     tools: z.array(z.unknown()).optional(),
     /** [Prompt] Gate configuration: include, exclude, framework_gates. */

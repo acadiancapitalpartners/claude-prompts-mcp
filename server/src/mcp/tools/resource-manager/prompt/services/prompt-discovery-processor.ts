@@ -7,7 +7,7 @@ import { PromptAnalyzer } from '../analysis/prompt-analyzer.js';
 import { PromptResourceContext } from '../core/context.js';
 import { FilterParser } from '../search/filter-parser.js';
 import { PromptMatcher } from '../search/prompt-matcher.js';
-import { validateRequiredFields } from '../utils/validation.js';
+import { validateChainStepReferences, validateRequiredFields } from '../utils/validation.js';
 
 import type { PromptResourceActionId } from '../../../../metadata/definitions/prompt-resource.js';
 
@@ -295,7 +295,7 @@ export class PromptDiscoveryProcessor {
         response += `\n**User Message Template**:\n\`\`\`\n${prompt.userMessageTemplate}\n\`\`\`\n`;
       }
 
-      // Chain steps (full details)
+      // Chain steps (full details) + integrity check
       const steps = prompt.chainSteps;
       if (steps != null && steps.length > 0) {
         response += `\n**Chain Steps** (${steps.length}):\n`;
@@ -307,6 +307,15 @@ export class PromptDiscoveryProcessor {
           }
           response += `\n`;
         });
+
+        const allPromptIds = this.getConvertedPrompts().map((p) => p.id);
+        const refValidation = validateChainStepReferences(steps as unknown[], allPromptIds);
+        if (!refValidation.valid) {
+          response += `\n**Chain Integrity**:\n`;
+          for (const warning of refValidation.warnings) {
+            response += `- ${warning}\n`;
+          }
+        }
       }
 
       // Gate configuration

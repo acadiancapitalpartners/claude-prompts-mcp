@@ -281,6 +281,115 @@ export function validateToolDefinitions(tools: ToolDefinitionInput[]): string[] 
   return errors;
 }
 
+// ---------------------------------------------------------------------------
+// Chain step operations
+// ---------------------------------------------------------------------------
+
+export interface ChainStepOperationOptions {
+  operation: 'add' | 'remove' | 'reorder' | 'replace';
+  index?: number;
+  stepData?: Record<string, unknown>;
+  order?: number[];
+}
+
+/**
+ * Apply a step-level operation to a chain steps array.
+ * Pure function — returns a new array without mutating the input.
+ */
+export function applyChainStepOperation(
+  currentSteps: unknown[],
+  opts: ChainStepOperationOptions
+): unknown[] {
+  switch (opts.operation) {
+    case 'add': {
+      if (opts.stepData == null) {
+        throw new ValidationError('chain_step_data required for add operation');
+      }
+      const steps = [...currentSteps];
+      if (opts.index !== undefined) {
+        if (opts.index < 0 || opts.index > steps.length) {
+          throw new ValidationError(
+            `chain_step_index ${opts.index} out of range [0, ${steps.length}]`
+          );
+        }
+        steps.splice(opts.index, 0, opts.stepData);
+      } else {
+        steps.push(opts.stepData);
+      }
+      return steps;
+    }
+    case 'remove': {
+      if (opts.index === undefined) {
+        throw new ValidationError('chain_step_index required for remove operation');
+      }
+      if (opts.index < 0 || opts.index >= currentSteps.length) {
+        throw new ValidationError(
+          `chain_step_index ${opts.index} out of range [0, ${currentSteps.length - 1}]`
+        );
+      }
+      const steps = [...currentSteps];
+      steps.splice(opts.index, 1);
+      return steps;
+    }
+    case 'reorder': {
+      if (!Array.isArray(opts.order)) {
+        throw new ValidationError('chain_step_order required for reorder operation');
+      }
+      if (opts.order.length !== currentSteps.length) {
+        throw new ValidationError(
+          `chain_step_order length (${opts.order.length}) must match step count (${currentSteps.length})`
+        );
+      }
+      const sorted = [...opts.order].sort((a, b) => a - b);
+      const expected = Array.from({ length: currentSteps.length }, (_, i) => i);
+      if (sorted.some((v, i) => v !== expected[i])) {
+        throw new ValidationError(
+          'chain_step_order must be a permutation of indices [0, ..., n-1]'
+        );
+      }
+      return opts.order.map((i) => currentSteps[i]);
+    }
+    case 'replace':
+      return currentSteps;
+    default:
+      throw new ValidationError(`Unknown chain_step_operation: ${String(opts.operation)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chain step reference validation
+// ---------------------------------------------------------------------------
+
+export interface ChainStepReferenceValidation {
+  valid: boolean;
+  warnings: string[];
+}
+
+/**
+ * Validate that chain step promptId references point to registered prompts.
+ * Non-blocking — returns warnings, does not throw.
+ * Skips nested references (containing '/') since those are sub-prompts.
+ */
+export function validateChainStepReferences(
+  steps: unknown[],
+  registeredIds: string[]
+): ChainStepReferenceValidation {
+  const warnings: string[] = [];
+  const idSet = new Set(registeredIds);
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as Record<string, unknown> | null;
+    const promptId = step?.['promptId'];
+    if (typeof promptId === 'string' && promptId.length > 0) {
+      if (!promptId.includes('/') && !idSet.has(promptId)) {
+        warnings.push(`Step ${i + 1} references unknown promptId '${promptId}'`);
+      }
+    }
+  }
+
+  return { valid: warnings.length === 0, warnings };
+}
+
 /**
  * Sanitize user input for safe processing
  */

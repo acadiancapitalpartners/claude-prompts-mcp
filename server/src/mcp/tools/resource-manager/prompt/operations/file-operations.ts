@@ -84,6 +84,19 @@ export class FileOperations {
         messages.push(`${promptExists ? 'Updated' : 'Created'} prompt: ${promptData.id}`);
         affectedFiles.push(...paths);
 
+        // Scaffold chain step directories for nested sub-prompts
+        if (Array.isArray(promptData.chainSteps) && promptData.chainSteps.length > 0) {
+          const scaffolded = await this.scaffoldChainStepDirectories(
+            promptDir,
+            promptData.id,
+            promptData.chainSteps
+          );
+          if (scaffolded.length > 0) {
+            messages.push(`Scaffolded sub-prompt directories (${scaffolded.length} files)`);
+            affectedFiles.push(...scaffolded);
+          }
+        }
+
         // Create/update tools if provided
         if (Array.isArray(promptData.tools) && promptData.tools.length > 0) {
           const toolResult = await this.createOrUpdateTools(
@@ -372,6 +385,63 @@ export class FileOperations {
     }
 
     return { messages, paths };
+  }
+
+  /**
+   * Scaffold sub-prompt directories for nested chain steps.
+   *
+   * Only scaffolds steps whose promptId follows the nested pattern (parentId/stepName).
+   * External references (plain promptId without '/') are skipped.
+   * Already-existing directories are skipped.
+   *
+   * Creates: {parentDir}/{stepDirName}/prompt.yaml + user-message.md
+   */
+  async scaffoldChainStepDirectories(
+    parentDir: string,
+    parentId: string,
+    steps: unknown[]
+  ): Promise<string[]> {
+    const scaffoldedPaths: string[] = [];
+    const prefix = `${parentId}/`;
+
+    for (const rawStep of steps) {
+      const step = rawStep as Record<string, unknown>;
+      const promptId = step?.['promptId'];
+      if (typeof promptId !== 'string' || !promptId.startsWith(prefix)) {
+        continue; // External reference — skip
+      }
+
+      const stepDirName = promptId.slice(prefix.length);
+      if (!stepDirName || stepDirName.includes('/')) {
+        continue; // Empty or deeply nested — skip
+      }
+
+      const stepDir = path.join(parentDir, stepDirName);
+      if (existsSync(stepDir)) {
+        continue; // Already exists — skip
+      }
+
+      await fs.mkdir(stepDir, { recursive: true });
+
+      const stepName = typeof step['stepName'] === 'string' ? step['stepName'] : stepDirName;
+      const yamlData = {
+        id: stepDirName,
+        name: stepName,
+        description: `Step: ${stepName}`,
+        userMessageTemplateFile: 'user-message.md',
+      };
+      const yamlPath = path.join(stepDir, 'prompt.yaml');
+      await safeWriteFile(yamlPath, serializeYaml(yamlData, { sortKeys: false }), 'utf8');
+      scaffoldedPaths.push(yamlPath);
+
+      const userMessagePath = path.join(stepDir, 'user-message.md');
+      await safeWriteFile(userMessagePath, `# ${stepName}\n\nExecute this step.\n`, 'utf8');
+      scaffoldedPaths.push(userMessagePath);
+
+      this.logger.info(`Scaffolded sub-prompt directory: ${stepDirName}`);
+    }
+
+    return scaffoldedPaths;
   }
 
   /**
