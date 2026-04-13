@@ -218,6 +218,11 @@ export class GateValidator {
         return await this.runShellVerify(criteria);
       }
 
+      // Script tool verification provides structured JSON pass/fail
+      if (criteria.type === 'script_tool') {
+        return await this.runScriptToolVerify(criteria);
+      }
+
       // LLM self-check provides semantic validation for LLM content
       if (criteria.type === 'llm_self_check') {
         return await this.runLLMSelfCheck(criteria);
@@ -341,6 +346,81 @@ export class GateValidator {
         score: 0,
         message: `Shell verification error: ${error instanceof Error ? error.message : String(error)}`,
         details: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  /**
+   * Run script tool verification — structured JSON pass/fail.
+   *
+   * Unlike shell_verify (binary exit code), script_tool returns structured output:
+   * { passed: boolean, reason?: string, details?: Record<string, unknown> }
+   *
+   * This enables richer gate feedback — the script can explain WHY it passed or failed,
+   * and provide structured details for the LLM to act on during bounce-back.
+   */
+  private async runScriptToolVerify(criteria: GatePassCriteria): Promise<ValidationCheck> {
+    const toolId = criteria.script_tool_id;
+
+    if (toolId == null || toolId.trim() === '') {
+      this.logger.warn(
+        '[SCRIPT GATE] Script tool verification skipped - no script_tool_id specified'
+      );
+      return {
+        type: 'script_tool',
+        passed: true,
+        score: 1.0,
+        message: 'Script tool verification skipped (no script_tool_id specified)',
+        details: { skipped: true },
+      };
+    }
+
+    this.logger.debug(`[SCRIPT GATE] Executing script tool verification: ${toolId}`);
+
+    try {
+      const { executeProcess } = await import('../../../shared/utils/process.js');
+
+      const result = await executeProcess({
+        command: toolId,
+        stdin: JSON.stringify(criteria.script_tool_input ?? {}),
+        cwd: criteria.script_tool_working_dir,
+        timeout: criteria.script_tool_timeout ?? 30000,
+        maxTimeout: 60000,
+        parseJson: true,
+        processGroup: false,
+      });
+
+      const scriptOutput = result.parsed as Record<string, unknown> | null;
+      const passed = scriptOutput?.['passed'] === true;
+      const reason =
+        (scriptOutput?.['reason'] as string) ??
+        (passed ? 'Script tool passed' : 'Script tool failed');
+
+      return {
+        type: 'script_tool',
+        passed,
+        score: passed ? 1.0 : 0,
+        message: `Script tool '${toolId}': ${reason}`,
+        details: {
+          toolId,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+          scriptOutput,
+          ...(result.signalName ? { signalName: result.signalName } : {}),
+          ...(result.stderr ? { stderr: result.stderr.slice(0, 500) } : {}),
+        },
+      };
+    } catch (error) {
+      this.logger.error(`[SCRIPT GATE] Script tool verification error:`, error);
+      return {
+        type: 'script_tool',
+        passed: false,
+        score: 0,
+        message: `Script tool error: ${error instanceof Error ? error.message : String(error)}`,
+        details: {
+          toolId,
           error: error instanceof Error ? error.message : String(error),
         },
       };

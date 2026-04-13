@@ -32,6 +32,7 @@ export const GatePassCriteriaSchema = z
       'pattern_check',
       'methodology_compliance',
       'shell_verify',
+      'script_tool',
     ]),
 
     // Content check options
@@ -74,6 +75,16 @@ export const GatePassCriteriaSchema = z
     shell_max_attempts: z.number().int().positive().optional(),
     /** Preset for shell verification (:fast, :full, :extended) */
     shell_preset: z.enum(['fast', 'full', 'extended']).optional(),
+
+    // Script tool verification options (structured JSON pass/fail)
+    /** Script or command to execute for verification */
+    script_tool_id: z.string().optional(),
+    /** JSON input sent via stdin to the script */
+    script_tool_input: z.record(z.unknown()).optional(),
+    /** Timeout in milliseconds for script execution (default: 30000) */
+    script_tool_timeout: z.number().int().positive().optional(),
+    /** Working directory for script execution */
+    script_tool_working_dir: z.string().optional(),
   })
   .passthrough(); // Allow additional fields for extensibility
 

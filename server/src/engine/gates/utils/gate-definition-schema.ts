@@ -148,6 +148,40 @@ export function validateLightweightGateDefinition(
         normalized.keyword_count = criteria.keyword_count;
       }
 
+      // Shell verification fields
+      if (criteria.shell_command) {
+        normalized.shell_command = criteria.shell_command;
+      }
+      if (criteria.shell_timeout !== undefined) {
+        normalized.shell_timeout = criteria.shell_timeout;
+      }
+      if (criteria.shell_working_dir) {
+        normalized.shell_working_dir = criteria.shell_working_dir;
+      }
+      if (criteria.shell_env) {
+        normalized.shell_env = criteria.shell_env;
+      }
+      if (criteria.shell_max_attempts !== undefined) {
+        normalized.shell_max_attempts = criteria.shell_max_attempts;
+      }
+      if (criteria.shell_preset) {
+        normalized.shell_preset = criteria.shell_preset;
+      }
+
+      // Script tool verification fields
+      if (criteria.script_tool_id) {
+        normalized.script_tool_id = criteria.script_tool_id;
+      }
+      if (criteria.script_tool_input) {
+        normalized.script_tool_input = criteria.script_tool_input;
+      }
+      if (criteria.script_tool_timeout !== undefined) {
+        normalized.script_tool_timeout = criteria.script_tool_timeout;
+      }
+      if (criteria.script_tool_working_dir) {
+        normalized.script_tool_working_dir = criteria.script_tool_working_dir;
+      }
+
       return normalized;
     });
   }

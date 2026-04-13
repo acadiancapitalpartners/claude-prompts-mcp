@@ -44,7 +44,8 @@ export interface GatePassCriteria {
     | 'llm_self_check'
     | 'pattern_check'
     | 'methodology_compliance'
-    | 'shell_verify';
+    | 'shell_verify'
+    | 'script_tool';
 
   // Content check options
   min_length?: number;
@@ -85,4 +86,14 @@ export interface GatePassCriteria {
   shell_max_attempts?: number;
   /** Preset for shell verification (:fast, :full, :extended) */
   shell_preset?: 'fast' | 'full' | 'extended';
+
+  // Script tool verification options (structured JSON pass/fail)
+  /** Script or command to execute for verification */
+  script_tool_id?: string;
+  /** JSON input sent via stdin to the script */
+  script_tool_input?: Record<string, unknown>;
+  /** Timeout in milliseconds for script execution (default: 30000) */
+  script_tool_timeout?: number;
+  /** Working directory for script execution */
+  script_tool_working_dir?: string;
 }
