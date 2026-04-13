@@ -2,52 +2,31 @@
 /**
  * Shell Verification Executor
  *
- * Executes shell commands for verification gates, enabling "Ralph Wiggum"
- * style autonomous loops where Claude's work is validated by real command
- * execution (ground truth) rather than LLM self-evaluation.
+ * Handles gate verification by running shell commands and interpreting
+ * exit codes. Delegates subprocess lifecycle to the stateless `executeProcess`
+ * utility in shared/utils/process.ts.
  *
- * Reuses patterns from scripts/execution/script-executor.ts:
- * - spawn('sh', ['-c', command]) for shell execution
- * - Timeout enforcement via setTimeout + proc.kill()
- * - Capture stdout/stderr with truncation
- * - Exit code 0 = PASS, non-zero = FAIL
+ * Shell-specific options applied per call:
+ * - processGroup: true (shell commands may spawn child processes)
+ * - truncateOutput: SHELL_OUTPUT_MAX_CHARS (prevent context overflow)
+ * - parseJson: false (raw command output)
  *
+ * @see shared/utils/process.ts for the shared execution utility
  * @see plans/ralph-style-loop.md for the implementation plan
  */
 
-import { spawn } from 'child_process';
-
-import { SHELL_OUTPUT_MAX_CHARS } from './types.js';
+import { executeProcess } from '../../../shared/utils/process.js';
 import { SHELL_VERIFY_DEFAULT_TIMEOUT, SHELL_VERIFY_MAX_TIMEOUT } from '../constants.js';
+import { SHELL_OUTPUT_MAX_CHARS } from './types.js';
 
 import type { ShellVerifyGate, ShellVerifyResult, ShellVerifyExecutorConfig } from './types.js';
 
 /**
- * Environment variables safe to inherit from parent process.
- * Mirrors the allowlist from ScriptExecutor to prevent credential leakage.
- */
-const SAFE_ENV_ALLOWLIST: Set<string> = new Set([
-  'PATH',
-  'HOME',
-  'USER',
-  'SHELL',
-  'TERM',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'NODE_ENV',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'CI',
-  'GITHUB_ACTIONS',
-]);
-
-/**
  * Shell Verification Executor
  *
- * Handles execution of shell commands for verification gates with
- * timeout enforcement, output capture, and proper process cleanup.
+ * Class wrapper preserves the existing public API (consumer code uses
+ * `executor.execute(gate)`). Internally it just maps domain types to
+ * `executeProcess` options.
  *
  * @example
  * ```typescript
@@ -60,8 +39,6 @@ const SAFE_ENV_ALLOWLIST: Set<string> = new Set([
  *
  * if (result.passed) {
  *   console.log('Tests passed!');
- * } else {
- *   console.log('Tests failed:', result.stderr);
  * }
  * ```
  */
@@ -76,14 +53,6 @@ export class ShellVerifyExecutor {
     this.maxTimeout = config.maxTimeout ?? SHELL_VERIFY_MAX_TIMEOUT;
     this.defaultWorkingDir = config.defaultWorkingDir ?? process.cwd();
     this.debug = config.debug ?? false;
-
-    if (this.debug) {
-      console.error('[ShellVerifyExecutor] Initialized with config:', {
-        defaultTimeout: this.defaultTimeout,
-        maxTimeout: this.maxTimeout,
-        defaultWorkingDir: this.defaultWorkingDir,
-      });
-    }
   }
 
   /**
@@ -93,220 +62,46 @@ export class ShellVerifyExecutor {
    * @returns Verification result with pass/fail status and output
    */
   async execute(gate: ShellVerifyGate): Promise<ShellVerifyResult> {
-    const startTime = Date.now();
     const { command, workingDir, timeout, env } = gate;
 
     if (!command || command.trim() === '') {
-      return this.createResult({
-        startTime,
-        command: command ?? '',
+      return {
         passed: false,
         exitCode: -1,
         stdout: '',
         stderr: 'Empty command provided',
-      });
+        durationMs: 0,
+        command: command ?? '',
+      };
     }
 
-    const resolvedTimeout = this.resolveTimeout(timeout);
-    const resolvedWorkingDir = workingDir ?? this.defaultWorkingDir;
-    const resolvedEnv = this.buildEnvironment(env);
-
-    if (this.debug) {
-      console.error(`[ShellVerifyExecutor] Executing: ${command}`);
-      console.error(`[ShellVerifyExecutor] Working directory: ${resolvedWorkingDir}`);
-      console.error(`[ShellVerifyExecutor] Timeout: ${resolvedTimeout}ms`);
-    }
-
-    try {
-      return await this.spawnShell({
-        command,
-        cwd: resolvedWorkingDir,
-        env: resolvedEnv,
-        timeout: resolvedTimeout,
-        startTime,
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return this.createResult({
-        startTime,
-        command,
-        passed: false,
-        exitCode: -1,
-        stdout: '',
-        stderr: `Execution error: ${errorMessage}`,
-      });
-    }
-  }
-
-  /**
-   * Resolve and clamp timeout value.
-   */
-  private resolveTimeout(timeout?: number): number {
-    const resolved = timeout ?? this.defaultTimeout;
-    return Math.min(Math.max(resolved, 1000), this.maxTimeout);
-  }
-
-  /**
-   * Build environment variables for command execution.
-   * Uses allowlist to prevent credential leakage.
-   */
-  private buildEnvironment(additionalEnv?: Record<string, string>): NodeJS.ProcessEnv {
-    const safeEnv: Record<string, string> = {};
-
-    for (const key of SAFE_ENV_ALLOWLIST) {
-      if (process.env[key] !== undefined) {
-        safeEnv[key] = process.env[key]!;
-      }
-    }
-
-    return {
-      ...safeEnv,
-      ...(additionalEnv ?? {}),
-    };
-  }
-
-  /**
-   * Spawn a shell process and capture output.
-   */
-  private spawnShell(options: {
-    command: string;
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    timeout: number;
-    startTime: number;
-  }): Promise<ShellVerifyResult> {
-    return new Promise((resolve) => {
-      const { command, cwd, env, timeout, startTime } = options;
-
-      // Use detached: true to create a new process group
-      // This allows us to kill all child processes when timing out
-      const proc = spawn('sh', ['-c', command], {
-        cwd,
-        env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        detached: true,
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        // Kill the entire process group using negative PID
-        // This ensures child processes (like long-running commands) are also killed
-        try {
-          if (proc.pid) {
-            process.kill(-proc.pid, 'SIGTERM');
-          }
-        } catch {
-          // Process might have already exited
-          proc.kill('SIGTERM');
-        }
-        setTimeout(() => {
-          if (!proc.killed) {
-            try {
-              if (proc.pid) {
-                process.kill(-proc.pid, 'SIGKILL');
-              }
-            } catch {
-              proc.kill('SIGKILL');
-            }
-          }
-        }, 1000);
-      }, timeout);
-
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-        if (stdout.length > SHELL_OUTPUT_MAX_CHARS * 2) {
-          stdout = stdout.slice(-SHELL_OUTPUT_MAX_CHARS * 2);
-        }
-      });
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-        if (stderr.length > SHELL_OUTPUT_MAX_CHARS * 2) {
-          stderr = stderr.slice(-SHELL_OUTPUT_MAX_CHARS * 2);
-        }
-      });
-
-      proc.stdin?.end();
-
-      proc.on('close', (code) => {
-        clearTimeout(timeoutId);
-
-        const exitCode = code ?? (timedOut ? -1 : 0);
-        const passed = !timedOut && exitCode === 0;
-
-        resolve(
-          this.createResult({
-            startTime,
-            command,
-            passed,
-            exitCode,
-            stdout: this.truncateOutput(stdout),
-            stderr: this.truncateOutput(stderr),
-            timedOut: timedOut || undefined,
-          })
-        );
-      });
-
-      proc.on('error', (error) => {
-        clearTimeout(timeoutId);
-        resolve(
-          this.createResult({
-            startTime,
-            command,
-            passed: false,
-            exitCode: -1,
-            stdout: this.truncateOutput(stdout),
-            stderr: `Spawn error: ${error.message}`,
-          })
-        );
-      });
+    const result = await executeProcess({
+      command,
+      cwd: workingDir ?? this.defaultWorkingDir,
+      env,
+      timeout: timeout ?? this.defaultTimeout,
+      minTimeout: 1000,
+      maxTimeout: this.maxTimeout,
+      processGroup: true,
+      truncateOutput: SHELL_OUTPUT_MAX_CHARS,
+      parseJson: false,
+      debug: this.debug,
     });
-  }
 
-  /**
-   * Truncate output to prevent context overflow.
-   */
-  private truncateOutput(output: string): string {
-    if (output.length <= SHELL_OUTPUT_MAX_CHARS) {
-      return output;
-    }
-
-    const truncated = output.slice(-SHELL_OUTPUT_MAX_CHARS);
-    return `[...truncated ${output.length - SHELL_OUTPUT_MAX_CHARS} chars...]\n${truncated}`;
-  }
-
-  /**
-   * Create a verification result with timing.
-   */
-  private createResult(params: {
-    startTime: number;
-    command: string;
-    passed: boolean;
-    exitCode: number;
-    stdout: string;
-    stderr: string;
-    timedOut?: boolean;
-  }): ShellVerifyResult {
-    const { startTime, command, passed, exitCode, stdout, stderr, timedOut } = params;
-
-    const result: ShellVerifyResult = {
-      passed,
-      exitCode,
-      stdout,
-      stderr,
-      durationMs: Date.now() - startTime,
+    const shellResult: ShellVerifyResult = {
+      passed: result.timedOut !== true && result.exitCode === 0,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      durationMs: result.durationMs,
       command,
     };
 
-    if (timedOut) {
-      result.timedOut = true;
+    if (result.timedOut === true) {
+      shellResult.timedOut = true;
     }
 
-    return result;
+    return shellResult;
   }
 }
 

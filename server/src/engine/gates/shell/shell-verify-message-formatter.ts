@@ -9,6 +9,8 @@
  * Extracted from ShellVerificationStage to maintain orchestration layer limits.
  */
 
+import { resolveSignalName, resolveSignalDescription } from '../../../shared/utils/process.js';
+
 import type { ShellVerifyResult, PendingShellVerification } from './types.js';
 
 /**
@@ -44,6 +46,19 @@ export interface ShellVerifyFeedback {
  * Default max characters for error output display.
  */
 const DEFAULT_DISPLAY_MAX_LENGTH = 2000;
+
+/**
+ * Format an exit code with POSIX signal interpretation when applicable.
+ * e.g., 137 → "137 (SIGKILL — Killed (likely OOM))"
+ */
+function formatExitCode(exitCode: number): string {
+  const signalName = resolveSignalName(exitCode);
+  if (signalName == null) return String(exitCode);
+  const description = resolveSignalDescription(exitCode);
+  return description != null
+    ? `${exitCode} (${signalName} — ${description})`
+    : `${exitCode} (${signalName})`;
+}
 
 /**
  * Truncate output for display, keeping the end (most relevant for errors).
@@ -86,7 +101,7 @@ export function formatBounceBackMessage(
     `## Shell Verification FAILED (Attempt ${pending.attemptCount}/${pending.maxAttempts})`,
     '',
     `**Command:** \`${result.command}\``,
-    `**Exit Code:** ${result.exitCode}`,
+    `**Exit Code:** ${formatExitCode(result.exitCode)}`,
   ];
 
   if (result.timedOut === true) {
@@ -122,7 +137,7 @@ export function formatEscalationMessage(
     '',
     `**Command:** \`${result.command}\``,
     `**Attempts:** ${pending.attemptCount}/${pending.maxAttempts}`,
-    `**Exit Code:** ${result.exitCode}`,
+    `**Exit Code:** ${formatExitCode(result.exitCode)}`,
   ];
 
   if (result.timedOut === true) {
@@ -198,7 +213,7 @@ export function formatGateShellVerifySection(results: GateShellVerifyResult[]): 
     lines.push(`### ${result.gateName} — ${status}`);
     lines.push('');
     lines.push(`**Command:** \`${result.command}\``);
-    lines.push(`**Exit Code:** ${result.exitCode}`);
+    lines.push(`**Exit Code:** ${formatExitCode(result.exitCode)}`);
     lines.push(`**Duration:** ${result.durationMs}ms`);
 
     if (result.timedOut === true) {
