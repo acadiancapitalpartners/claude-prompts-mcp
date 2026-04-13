@@ -27,7 +27,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "lib"))
 
 from db_reader import load_active_chain_state
-from session_state import load_session_state
 from verify_active_store import (
     clear_verify_active_state,
     load_verify_active_state,
@@ -375,11 +374,8 @@ def main():
 
     if not verify_state:
         # No active verification — check for active chain before allowing stop
-        # SSOT: read from server's state.db (works without PostToolUse hook)
+        # SSOT: server's state.db (PID-scoped rows, WAL mode for concurrent reads)
         chain_state = load_active_chain_state()
-        # Fallback: hooks-state.db (if PostToolUse populated it)
-        if not chain_state and hook_session_id:
-            chain_state = load_session_state(hook_session_id)
         if chain_state:
             chain_id = chain_state.get("chain_id", "")
             step = chain_state.get("current_step", 0)
