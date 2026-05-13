@@ -14,6 +14,7 @@
 import { StepState } from './chain-execution.js';
 
 import type {
+  ChainRunStatus,
   ChainState,
   PendingGateReview,
   PendingShellVerificationSnapshot,
@@ -24,6 +25,21 @@ import type { StateStoreOptions } from './persistence.js';
 
 // Re-export StepState for consumers that previously imported it via modules/chains/types.ts
 export { StepState };
+
+// Re-export SEP-1686-aligned execution-lifecycle types so consumers can continue importing
+// from chain-session.ts without reaching into chain-execution.ts directly.
+export type {
+  ChainLifecycleEvent,
+  ChainRunStatus,
+  EvidenceContract,
+  EvidencePayload,
+  ExecutionRecord,
+  ExecutionStatusBlock,
+  GateVerdictSummary,
+  InputRequiredReason,
+  StepLifecycle,
+  StepSubstate,
+} from './chain-execution.js';
 
 /**
  * Minimal structural contract for parsed commands stored in session blueprints.
@@ -79,7 +95,25 @@ export interface ChainSession {
   pendingShellVerification?: PendingShellVerificationSnapshot;
   blueprint?: SessionBlueprint;
   lifecycle?: ChainSessionLifecycle;
+  /**
+   * SEP-1686-aligned run-level status. Sticky on terminal values
+   * ('completed' | 'failed' | 'cancelled') — once set, transitions are refused.
+   * Defaults to 'working' on createSession.
+   */
+  runStatus?: ChainRunStatus;
+  /** Timestamp set when runStatus transitions to 'completed' (or other terminal). */
+  runCompletedAt?: number;
 }
+
+/** Terminal run-status values — sticky once entered. */
+export const TERMINAL_RUN_STATUSES: readonly ChainRunStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+
+export const isTerminalRunStatus = (status: ChainRunStatus | undefined): boolean =>
+  status !== undefined && (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 
 export interface GateReviewOutcomeUpdate {
   verdict: 'PASS' | 'FAIL';
@@ -178,6 +212,23 @@ export interface ChainSessionService {
     isPlaceholder?: boolean
   ): Promise<boolean>;
   isStepComplete(sessionId: string, stepNumber: number): boolean;
+  /**
+   * Transition the run-level lifecycle status. Refuses transitions out of terminal
+   * states (completed/failed/cancelled). Returns true on accepted transition,
+   * false on rejection (terminal-stickiness violation or session not found).
+   */
+  transitionRunStatus(
+    sessionId: string,
+    target: ChainRunStatus,
+    scope?: StateStoreOptions
+  ): Promise<boolean>;
+  /**
+   * Cancel a chain session. Idempotent: already-cancelled sessions return true.
+   * Sets runStatus to 'cancelled' and propagates cancellation to non-terminal
+   * step states. Returns false only if session is not found or is in a terminal
+   * non-cancelled state (completed/failed).
+   */
+  cancelChain(sessionId: string, scope?: StateStoreOptions): Promise<boolean>;
   completeStep(
     sessionId: string,
     stepNumber: number,
