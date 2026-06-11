@@ -7,17 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0](https://github.com/acadiancapitalpartners/claude-prompts-mcp/compare/v2.1.0...v2.0.0) (2026-06-11)
 
-
-### ⚠ BREAKING CHANGES
-
-* **runtime:** Individual per-resource env vars and CLI flags removed. Use MCP_WORKSPACE with resources/ subdirectory structure instead.
-* **server:** License changed from MIT to AGPL-3.0-only. Network use of modified versions now requires source disclosure under Section 13 of the GNU Affero General Public License v3.
-* **server:** All runtime-state paths require explicit PathResolver configuration. Users running via npx must provide --workspace or set MCP_WORKSPACE. Storage backend migrated from JSON files to SQLite — downstream readers of state files must use SQLite.
-* **paths:** All path-dependent modules now require explicit path configuration. Callers must provide paths via PathResolver or CLI flags.
-* Complete MCP server restructure with new consolidated API
-
 ### Added
 
+- **`session:cancel` action on `system_control`** (Tier 3): MCP clients can now cancel an active chain session via `system_control(action:"session", operation:"cancel", session_id:"chain-X#1")`. Transitions `runStatus` to `cancelled`; idempotent on already-cancelled sessions; refuses sessions in terminal `completed`/`failed` state. Use `operation:"cancel"` for soft-stop (preserves session for audit), `operation:"clear"` for hard removal (deletes session and chain history).
+- **`ExecutionRecord` persistence** (Tier 5): Pipeline stages 9 and 10 now emit append-only ledger rows to the `execution_records` table on every chain-step transition. Stage 9 emits a `working` record per render (with `substate.renderedAt`); stage 10 emits a `completed` record on chain terminal. Records carry SEP-1686-aligned `StepLifecycle` + `StepSubstate` + `GateVerdictSummary` shape. ULIDs (monotonic) preserve insertion order across rapid emissions. Emission is best-effort — failures log a warning and never break pipeline execution.
+- **`command-tokenizer.ts`**: Pure function `tokenizeCommand()` with quote-aware detection for all 8 operator types (chain, delegation, gate, parallel, repetition, conditional, framework, style). Includes delimiter overlap filtering to prevent `==>` from false-matching as gate operator
+- **`command-tokenizer.test.ts`**: 56 tests covering all operator types, quoted argument regression suite, mixed operators, prompt ID extraction, cleaned command generation, and edge cases
 * add Claude Code plugin for /install-plugin support ([c3b5654](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/c3b5654aaeea5fec12402a859eb687d1e666caa4))
 * add dev:claude script for --plugin-dir workflow ([2a7d6f8](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/2a7d6f8abeedfb6c6ed6f36becae644ebad6f7d7))
 * add marketplace.json for plugin distribution ([bf79fcb](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/bf79fcb56a38d2829f88e5365a5042494d2eba23))
@@ -77,6 +72,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **styles:** add style operator (#) for response formatting ([d2c3173](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/d2c3173ad4d7edb758207460d56167dd7bc4336b))
 * update documentation for version 1.1.0 - "Intelligent Execution" ([7e1fb3f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/7e1fb3f02a226b232464a5ae98132d25344813dd))
 
+### Changed
+
+- **`db_reader.py` migrated to `v_execution_status` SSOT view** (Tier 4): Python hook now reads chain state from the cross-language SSOT view introduced in Tier 1, using the canonical `run_status` column (Tier 2) for boundary detection. Falls back to `chain_sessions` per-row table, then `chain_run_registry` blob, for backward compatibility during rollout (Tier 10 will retire the blob fallback). Hook output shape unchanged — existing chain-stop integration is preserved.
+- **Consolidated four KV-blob tables into shared `kv_state`** (`SCHEMA_VERSION` 15 → 16): `framework_state`, `gate_system_state`, `argument_history`, and `resource_hash_cache` are now rows in a single `kv_state` table keyed on `(tenant_id, key)`. `SqliteStateStoreConfig` gains an optional discriminator `key` for shared tables. `state.db` is ephemeral, so the schema bump auto-recreates on next server start with no migration burden. Drops 4 tables and 5 indexes.
+- **Atomic dual-write to chain registry + hook view**: `persistSessions()` now wraps the `chain_run_registry` blob write and the derived `chain_sessions` projection inside a single transaction so the two can never diverge. Renamed `syncToSessionTable` → `projectToHookView` to reflect that `chain_sessions` is a read-only projection of the registry blob.
+- **`SqliteChainRunRegistry` class removed**: dead code with zero consumers. Single `DirectChainRunRegistry` implementation remains.
+- **Command tokenizer refactor**: Replaced duplicated operator detection across 3 parsing strategies with a single-pass, quote-aware `tokenizeCommand()` function
+  - `command-parser.ts`: 771→710 lines; symbolic `canHandle` reduced from 20 lines to 1; gate/framework/style stripping regex (~25 lines) replaced by `tokens.promptId`/`tokens.rawArgs`
+  - `parser-utils.ts`: 198→156 lines; removed `hasOperatorOutsideQuotes` and `stripFrameworkOperatorOutsideQuotes` (zero consumers — tokenizer subsumes)
+  - Strategies now consume `TokenizedCommand` instead of re-detecting operators: `canHandle(command, tokens)` reads `tokens.format` and `tokens.hasSymbolicOperators`
+  - Eliminates the class of bugs where special characters inside quoted arguments (e.g., `"R3F + Visx"`, `"modes: (1)"`) triggered false operator detection
+* centralize LLM availability check with isLLMEnabled() method ([4499316](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/4499316e8928b8605e605a81ffa7e4c6095ee093))
+* **config:** simplify transport configuration ([c27ff1e](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/c27ff1e67a3c911986a3ce696a765b1c76acd437))
+* consolidate parser system and remove dead code ([5518c6b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5518c6b747e13c8e4d67c09d92ae48312fc3659c))
+* consolidate plugin files into .claude-plugin/ ([69e7aaf](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/69e7aaf319656b8bcf4bd1234765dc00cf33b358))
+* **docs:** migrate guides to Diátaxis framework ([c51a6ba](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/c51a6ba3dc3e5f0ec8d0442c988a656b766de635))
+* **execution:** extract shared process utility with POSIX signal interpretation ([465bf53](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/465bf5353da2b068d517f505aa6ce87d40adb3b3))
+* **gates:** consolidate gate verdict validation to single source of truth ([0ae1ae9](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/0ae1ae9ed20070515129ce239f7b0aec5f31daff))
+* **gates:** extract gate-activation utility and cleanup dead code ([85bd265](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/85bd265ae91599718b257055ac45955249bf3f0a))
+* **gates:** migrate to YAML+MD directory structure with hot-reload ([1517d6b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/1517d6bcb7d269dce19e365f854752b7954eb7e7))
+* **gemini:** move distribution to separate repo ([f250121](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/f2501214ae95e4b2b15b252d33847bf919eaccc7))
+* **hooks:** improve Python hook type safety and reduce pyrefly baseline ([69cc281](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/69cc281d4b6ab3d137b0713b4730be55ffac4288))
+* **hooks:** migrate Gemini hooks to gemini-prompts repo ([0520734](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/05207341b82cfc9e2bf719713bc64178ae36a4d8))
+* **mcp-tools:** consolidate prompt_manager into resource_manager ([6a41a52](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/6a41a5293524b0097132d22ccd6107e43cd863f6))
+* **mcp:** update tools and contracts for new subsystems ([1390129](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/13901297fcd5945ad8c1f0d3cae071a805239bcd))
+* migrate plugin structure to repo root ([49c2c73](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/49c2c73d7f77f04a7c02ed20dc0696de46407ef3))
+* **parsers:** centralize operator detection in single-pass command tokenizer ([1dab41b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/1dab41bd182872178cd3bc7c4b365eda8445cc6d))
+* **parsers:** simplify argument matching and remove dead code ([3befb9f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/3befb9f086567d880b4152a49437b551b7b51a5b))
+* **paths:** enforce explicit path resolution, remove process.cwd() fallbacks ([b93ca78](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/b93ca789abf5e2bcf318fce73dd27cd634563efa))
+* **pipeline:** align stages with gate/style architecture ([d39fdb7](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/d39fdb74473559990c22c7d585917a16ca073f91))
+* **prompt-guidance:** remove unused resource selection code ([a2da026](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/a2da0267d90a206a0864a62d741ccbab1819f8ca))
+* **remotion:** replace demo compositions with Liquescent design system ([b06706b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/b06706b135ff51aada2191b283e905e66eff4b40))
+* **resources:** consolidate write paths, remove dead JSON format ([4e8bdf6](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/4e8bdf608cf4886b23c499b1bfab45383c82d9e3))
+* **runtime:** migrate CLI argument parsing to node:util parseArgs ([71dbe00](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/71dbe00e27199850ad093cf077638ca3d4038eee))
+* **runtime:** replace ServerRootDetector with resolvePackageRoot() ([3c2bd7f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/3c2bd7ffb1c04c4949397119cb1680126481f3e2))
+* **server:** complete modular monolith migration to 5-layer architecture ([31d3884](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/31d3884726f29611a5e4ca1e3bd9673729b53d90))
+* **server:** decompose Tier 5 oversized files to meet size advisories ([adbc670](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/adbc6706e94b5047f494aaa2f00ee8f9d364e2f7))
+* **server:** enforce architecture boundaries via DatabasePort injection ([5b39be0](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5b39be009cad1221ad3d2471c243282897d11723))
+* **server:** relocate tooling/ submodules and consolidate pipeline imports ([5204a7a](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5204a7a01e66cefffb2a607c0432e0a880df1cb3))
+* **server:** replace codegen with hand-written schemas and resource-driven overlays ([84b74cf](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/84b74cfa8863497028d4fa9b2b0cb67fcc92619b))
+* **types:** consolidate context types and add gate response contract ([aa51202](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/aa512028795538127fb86eb3ef3d210b85ad6e9e))
+* update README and contributing guidelines for clarity and consistency ([0e8caba](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/0e8caba48e1dfabede3fdbed9e0273ba8ae73b8b))
 
 ### Fixed
 
@@ -143,42 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **tests:** set PROMPTS_PATH in test setup for template rendering ([34769d7](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/34769d762fc9ffdb2f7c00064dc4a04bdd2a0a9e))
 * **tests:** update E2E plugin validation for current structure ([053b0be](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/053b0be8bdd3f3443c5e68b9415e9e0e716d8739))
 
-
-### Changed
-
-* centralize LLM availability check with isLLMEnabled() method ([4499316](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/4499316e8928b8605e605a81ffa7e4c6095ee093))
-* **config:** simplify transport configuration ([c27ff1e](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/c27ff1e67a3c911986a3ce696a765b1c76acd437))
-* consolidate parser system and remove dead code ([5518c6b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5518c6b747e13c8e4d67c09d92ae48312fc3659c))
-* consolidate plugin files into .claude-plugin/ ([69e7aaf](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/69e7aaf319656b8bcf4bd1234765dc00cf33b358))
-* **docs:** migrate guides to Diátaxis framework ([c51a6ba](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/c51a6ba3dc3e5f0ec8d0442c988a656b766de635))
-* **execution:** extract shared process utility with POSIX signal interpretation ([465bf53](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/465bf5353da2b068d517f505aa6ce87d40adb3b3))
-* **gates:** consolidate gate verdict validation to single source of truth ([0ae1ae9](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/0ae1ae9ed20070515129ce239f7b0aec5f31daff))
-* **gates:** extract gate-activation utility and cleanup dead code ([85bd265](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/85bd265ae91599718b257055ac45955249bf3f0a))
-* **gates:** migrate to YAML+MD directory structure with hot-reload ([1517d6b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/1517d6bcb7d269dce19e365f854752b7954eb7e7))
-* **gemini:** move distribution to separate repo ([f250121](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/f2501214ae95e4b2b15b252d33847bf919eaccc7))
-* **hooks:** improve Python hook type safety and reduce pyrefly baseline ([69cc281](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/69cc281d4b6ab3d137b0713b4730be55ffac4288))
-* **hooks:** migrate Gemini hooks to gemini-prompts repo ([0520734](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/05207341b82cfc9e2bf719713bc64178ae36a4d8))
-* **mcp-tools:** consolidate prompt_manager into resource_manager ([6a41a52](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/6a41a5293524b0097132d22ccd6107e43cd863f6))
-* **mcp:** update tools and contracts for new subsystems ([1390129](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/13901297fcd5945ad8c1f0d3cae071a805239bcd))
-* migrate plugin structure to repo root ([49c2c73](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/49c2c73d7f77f04a7c02ed20dc0696de46407ef3))
-* **parsers:** centralize operator detection in single-pass command tokenizer ([1dab41b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/1dab41bd182872178cd3bc7c4b365eda8445cc6d))
-* **parsers:** simplify argument matching and remove dead code ([3befb9f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/3befb9f086567d880b4152a49437b551b7b51a5b))
-* **paths:** enforce explicit path resolution, remove process.cwd() fallbacks ([b93ca78](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/b93ca789abf5e2bcf318fce73dd27cd634563efa))
-* **pipeline:** align stages with gate/style architecture ([d39fdb7](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/d39fdb74473559990c22c7d585917a16ca073f91))
-* **prompt-guidance:** remove unused resource selection code ([a2da026](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/a2da0267d90a206a0864a62d741ccbab1819f8ca))
-* **remotion:** replace demo compositions with Liquescent design system ([b06706b](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/b06706b135ff51aada2191b283e905e66eff4b40))
-* **resources:** consolidate write paths, remove dead JSON format ([4e8bdf6](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/4e8bdf608cf4886b23c499b1bfab45383c82d9e3))
-* **runtime:** migrate CLI argument parsing to node:util parseArgs ([71dbe00](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/71dbe00e27199850ad093cf077638ca3d4038eee))
-* **runtime:** replace ServerRootDetector with resolvePackageRoot() ([3c2bd7f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/3c2bd7ffb1c04c4949397119cb1680126481f3e2))
-* **server:** complete modular monolith migration to 5-layer architecture ([31d3884](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/31d3884726f29611a5e4ca1e3bd9673729b53d90))
-* **server:** decompose Tier 5 oversized files to meet size advisories ([adbc670](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/adbc6706e94b5047f494aaa2f00ee8f9d364e2f7))
-* **server:** enforce architecture boundaries via DatabasePort injection ([5b39be0](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5b39be009cad1221ad3d2471c243282897d11723))
-* **server:** relocate tooling/ submodules and consolidate pipeline imports ([5204a7a](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/5204a7a01e66cefffb2a607c0432e0a880df1cb3))
-* **server:** replace codegen with hand-written schemas and resource-driven overlays ([84b74cf](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/84b74cfa8863497028d4fa9b2b0cb67fcc92619b))
-* **types:** consolidate context types and add gate response contract ([aa51202](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/aa512028795538127fb86eb3ef3d210b85ad6e9e))
-* update README and contributing guidelines for clarity and consistency ([0e8caba](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/0e8caba48e1dfabede3fdbed9e0273ba8ae73b8b))
-
-
 ### Documentation
 
 * accurately describe framework injection behavior ([98ec249](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/98ec2494ee32f10368de3ede17f3fe2d2ee575da))
@@ -224,6 +225,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * update README for bundled distribution (Phase B) ([3a0e44f](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/3a0e44f90946ad4b265ea5f3f5cb0582ff8bc7a1))
 * update README to reflect new MCP tools reference and roadmap ([0191d68](https://github.com/acadiancapitalpartners/claude-prompts-mcp/commit/0191d68c756ab5d487dccc9500448f7320c7c0a2))
 
+### ⚠ BREAKING CHANGES
+
+* **runtime:** Individual per-resource env vars and CLI flags removed. Use MCP_WORKSPACE with resources/ subdirectory structure instead.
+* **server:** License changed from MIT to AGPL-3.0-only. Network use of modified versions now requires source disclosure under Section 13 of the GNU Affero General Public License v3.
+* **server:** All runtime-state paths require explicit PathResolver configuration. Users running via npx must provide --workspace or set MCP_WORKSPACE. Storage backend migrated from JSON files to SQLite — downstream readers of state files must use SQLite.
+* **paths:** All path-dependent modules now require explicit path configuration. Callers must provide paths via PathResolver or CLI flags.
+* Complete MCP server restructure with new consolidated API
 
 ### Maintenance
 
@@ -234,28 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
 
-- **`session:cancel` action on `system_control`** (Tier 3): MCP clients can now cancel an active chain session via `system_control(action:"session", operation:"cancel", session_id:"chain-X#1")`. Transitions `runStatus` to `cancelled`; idempotent on already-cancelled sessions; refuses sessions in terminal `completed`/`failed` state. Use `operation:"cancel"` for soft-stop (preserves session for audit), `operation:"clear"` for hard removal (deletes session and chain history).
-- **`ExecutionRecord` persistence** (Tier 5): Pipeline stages 9 and 10 now emit append-only ledger rows to the `execution_records` table on every chain-step transition. Stage 9 emits a `working` record per render (with `substate.renderedAt`); stage 10 emits a `completed` record on chain terminal. Records carry SEP-1686-aligned `StepLifecycle` + `StepSubstate` + `GateVerdictSummary` shape. ULIDs (monotonic) preserve insertion order across rapid emissions. Emission is best-effort — failures log a warning and never break pipeline execution.
-
-### Changed
-
-- **`db_reader.py` migrated to `v_execution_status` SSOT view** (Tier 4): Python hook now reads chain state from the cross-language SSOT view introduced in Tier 1, using the canonical `run_status` column (Tier 2) for boundary detection. Falls back to `chain_sessions` per-row table, then `chain_run_registry` blob, for backward compatibility during rollout (Tier 10 will retire the blob fallback). Hook output shape unchanged — existing chain-stop integration is preserved.
-- **Consolidated four KV-blob tables into shared `kv_state`** (`SCHEMA_VERSION` 15 → 16): `framework_state`, `gate_system_state`, `argument_history`, and `resource_hash_cache` are now rows in a single `kv_state` table keyed on `(tenant_id, key)`. `SqliteStateStoreConfig` gains an optional discriminator `key` for shared tables. `state.db` is ephemeral, so the schema bump auto-recreates on next server start with no migration burden. Drops 4 tables and 5 indexes.
-- **Atomic dual-write to chain registry + hook view**: `persistSessions()` now wraps the `chain_run_registry` blob write and the derived `chain_sessions` projection inside a single transaction so the two can never diverge. Renamed `syncToSessionTable` → `projectToHookView` to reflect that `chain_sessions` is a read-only projection of the registry blob.
-- **`SqliteChainRunRegistry` class removed**: dead code with zero consumers. Single `DirectChainRunRegistry` implementation remains.
-
-- **Command tokenizer refactor**: Replaced duplicated operator detection across 3 parsing strategies with a single-pass, quote-aware `tokenizeCommand()` function
-  - `command-parser.ts`: 771→710 lines; symbolic `canHandle` reduced from 20 lines to 1; gate/framework/style stripping regex (~25 lines) replaced by `tokens.promptId`/`tokens.rawArgs`
-  - `parser-utils.ts`: 198→156 lines; removed `hasOperatorOutsideQuotes` and `stripFrameworkOperatorOutsideQuotes` (zero consumers — tokenizer subsumes)
-  - Strategies now consume `TokenizedCommand` instead of re-detecting operators: `canHandle(command, tokens)` reads `tokens.format` and `tokens.hasSymbolicOperators`
-  - Eliminates the class of bugs where special characters inside quoted arguments (e.g., `"R3F + Visx"`, `"modes: (1)"`) triggered false operator detection
-
-### Added
-
-- **`command-tokenizer.ts`**: Pure function `tokenizeCommand()` with quote-aware detection for all 8 operator types (chain, delegation, gate, parallel, repetition, conditional, framework, style). Includes delimiter overlap filtering to prevent `==>` from false-matching as gate operator
-- **`command-tokenizer.test.ts`**: 56 tests covering all operator types, quoted argument regression suite, mixed operators, prompt ID extraction, cleaned command generation, and edge cases
 
 ## [2.1.0](https://github.com/minipuft/claude-prompts/compare/v2.0.0...v2.1.0) (2026-03-19)
 
